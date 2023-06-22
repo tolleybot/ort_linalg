@@ -15,3 +15,8 @@ python3 -m pip install cmake
 # Build Debug version
 ./build.sh --config Debug --build_shared_lib --parallel --compile_no_warning_as_error 
 
+
+# Test output from build
+6: Test command: /home/cjoy/src/onnxruntime/build/Linux/Debug/onnxruntime_api_tests_without_env "--gtest_output=xml:/home/cjoy/src/onnxruntime/build/Linux/Debug/onnxruntime_api_tests_without_env.Debug.results.xml"
+6: Working Directory: /home/cjoy/src/onnxruntime/build/Linux/Debug
+

@@ -13,8 +13,7 @@ source ./venv/bin/activate
 python3 -m pip install cmake
 
 # Additional installs for wheel
-pip install numpy
-pip install onnx
+pip install -r requirements-dev.txt
 
 # Build Debug wheel
 ./build.sh --config Debug --parallel --compile_no_warning_as_error --build_wheel

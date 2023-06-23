@@ -4,6 +4,10 @@
 # Adapted from https://github.com/microsoft/onnxruntime-inference-examples/blob/main/python/api/onnxruntime-python-api.py
 # Added custom operator as described in: https://github.com/onnx/tutorials/blob/master/PyTorchCustomOperator/README.md
 
+# Before running this call
+# python setup.py install
+# to compile custop_op_one.cpp
+
 import os
 import numpy as np
 import torch

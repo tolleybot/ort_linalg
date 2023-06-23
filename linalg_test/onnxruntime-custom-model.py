@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import onnxruntime
 
+torch.manual_seed(0)
 CUSTOM_OP_DOMAIN = 'test.customop'
 CUSTOM_OP_VERSION = 1
 MODEL_FILE = 'custom_op_test.onnx'
@@ -17,21 +18,20 @@ DEVICE_INDEX = 0  # Replace this with the index of the device you want to run on
 DEVICE = f'{DEVICE_NAME}:{DEVICE_INDEX}'
 
 
-def custom_op_one(g, x, y):
-    return g.op(CUSTOM_OP_DOMAIN + "::CustomOpOne", x, y)
+def register_custom_op():
+    def custom_op_one(g, x, y):
+        return g.op(CUSTOM_OP_DOMAIN + "::CustomOpOne", x, y)
+
+    from torch.onnx import register_custom_op_symbolic
+    register_custom_op_symbolic(symbolic_name='mynamespace::custom_op_one', symbolic_fn=custom_op_one,
+                                opset_version=CUSTOM_OP_VERSION)
 
 
-from torch.onnx import register_custom_op_symbolic
+class CustomModel(torch.nn.Module):
+    def forward(self, x, y):
+        return torch.ops.mynamespace.custom_op_one(x, y)
 
-register_custom_op_symbolic(symbolic_name='mynamespace::custom_op_one', symbolic_fn=custom_op_one,
-                            opset_version=CUSTOM_OP_VERSION)
-
-
-def create_model():
-    class CustomModel(torch.nn.Module):
-        def forward(self, x, y):
-            return torch.ops.mynamespace.custom_op_one(x, y)
-
+def create_custom_model():
     type = torch.float32
     sample_x = torch.ones(3, dtype=type)
     sample_y = torch.zeros(3, dtype=type)
@@ -39,7 +39,6 @@ def create_model():
 
     torch.onnx.export(CustomModel(), inputs, MODEL_FILE,
                       opset_version=9,
-                      example_outputs=None,
                       input_names=["x", "y"], output_names=["z"],
                       dynamic_axes={"x": {0: "array_length_x"}, "y": {0: "array_length_y"}, },
                       custom_opsets={CUSTOM_OP_DOMAIN: CUSTOM_OP_VERSION})
@@ -60,6 +59,15 @@ def create_session(model: str) -> onnxruntime.InferenceSession:
     sess1 = onnxruntime.InferenceSession(model, so1, providers=providers)
 
     return sess1
+
+
+# Run the model from torch
+def run_pytorch(x: np.array, y: np.array) -> np.array:
+    model = CustomModel()
+    model.eval()
+    with torch.no_grad():
+        z = model(x, y)
+    return z
 
 
 # Run the model on CPU consuming and producing numpy arrays
@@ -137,7 +145,13 @@ def run_with_torch_tensors_on_device(x: torch.Tensor, y: torch.Tensor, np_type: 
 
 
 def main():
-    create_model()
+    torch.ops.load_library(
+        "build/lib.linux-x86_64-cpython-310/custom_op_one.cpython-310-x86_64-linux-gnu.so")
+    register_custom_op()
+    create_custom_model()
+
+    print(run_pytorch(x=torch.tensor([1.0, 2.0, 3.0]), y=torch.tensor([4.0, 5.0, 6.0])))
+    # tensor([1., 2., 3.])  # For now, the pytorch impl is deliberately different from the onnxruntime impl
 
     print(run(x=np.float32([1.0, 2.0, 3.0]), y=np.float32([4.0, 5.0, 6.0])))
     # [array([5., 7., 9.], dtype=float32)]
@@ -147,7 +161,7 @@ def main():
     # [ 2.  4.  6.  8. 10.]
 
     print(run_with_torch_tensors_on_device(torch.rand(5).to(DEVICE), torch.rand(5).to(DEVICE)))
-    # tensor([0.7023, 1.3127, 1.7289, 0.3982, 0.8386])
+    # tensor([1.1303, 1.2583, 0.9849, 0.5877, 0.9397])
 
 
 if __name__ == "__main__":

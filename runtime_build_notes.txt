@@ -18,6 +18,9 @@ pip install -r requirements-dev.txt
 # Build Debug wheel
 ./build.sh --config Debug --parallel --compile_no_warning_as_error --build_wheel
 
+# When done, use this via
+# pip install /home/cjoy/src/onnxruntime/build/Linux/Debug/dist/onnxruntime-1.15.1-cp310-cp310-linux_x86_64.whl
+
 
 # Test output from build
 6: Test command: /home/cjoy/src/onnxruntime/build/Linux/Debug/onnxruntime_api_tests_without_env "--gtest_output=xml:/home/cjoy/src/onnxruntime/build/Linux/Debug/onnxruntime_api_tests_without_env.Debug.results.xml"

@@ -6,7 +6,7 @@
 
 # Before running this call
 # python setup.py install
-# to compile custop_op_one.cpp
+# to compile custop_op_one.cpp file
 
 import os
 import numpy as np

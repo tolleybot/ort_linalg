@@ -35,10 +35,11 @@ class CustomModel(torch.nn.Module):
     def forward(self, x, y):
         return torch.ops.mynamespace.custom_op_one(x, y)
 
+
 def create_custom_model():
-    type = torch.float32
-    sample_x = torch.ones(3, dtype=type)
-    sample_y = torch.zeros(3, dtype=type)
+    dtype = torch.float32
+    sample_x = torch.ones(3, dtype=dtype)
+    sample_y = torch.zeros(3, dtype=dtype)
     inputs = (sample_x, sample_y)
 
     torch.onnx.export(CustomModel(), inputs, MODEL_FILE,
@@ -77,9 +78,7 @@ def run_pytorch(x: np.array, y: np.array) -> np.array:
 # Run the model on CPU consuming and producing numpy arrays
 def run(x: np.array, y: np.array) -> np.array:
     session = create_session(MODEL_FILE)
-
     z = session.run(["z"], {"x": x, "y": y})
-
     return z[0]
 
 
@@ -100,7 +99,6 @@ def run_with_data_on_device(x: np.array, y: np.array) -> onnxruntime.OrtValue:
     session.run_with_iobinding(io_binding)
 
     z = io_binding.get_outputs()
-
     return z[0]
 
 
@@ -132,7 +130,7 @@ def run_with_torch_tensors_on_device(x: torch.Tensor, y: torch.Tensor, np_type: 
         buffer_ptr=y_tensor.data_ptr(),
     )
 
-    ## Allocate the PyTorch tensor for the model output
+    # Allocate the PyTorch tensor for the model output
     z_tensor = torch.empty(x_tensor.shape, dtype=torch_type, device=DEVICE).contiguous()
     binding.bind_output(
         name='z',
@@ -144,7 +142,6 @@ def run_with_torch_tensors_on_device(x: torch.Tensor, y: torch.Tensor, np_type: 
     )
 
     session.run_with_iobinding(binding)
-
     return z_tensor
 
 

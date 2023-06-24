@@ -5,5 +5,9 @@
   "dependencies" : [ {
     "name" : "ms-gsl",
     "version>=" : "4.0.0"
+  }, {
+    "name" : "armadillo",
+    "version>=" : "12.0.1",
+    "$comment" : "    find_package(Armadillo CONFIG REQUIRED)\n\n    target_link_libraries(main PRIVATE armadillo)\n"
   } ]
 }

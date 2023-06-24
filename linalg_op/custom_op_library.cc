@@ -8,57 +8,65 @@
 #include <cmath>
 #include <mutex>
 
+#include <armadillo>
+// using namespace arma;
+
 #include "core/common/common.h"
 
-#ifdef USE_CUDA
-#include <cuda_runtime.h>
-template <typename T1, typename T2, typename T3>
-void cuda_add(int64_t, T3*, const T1*, const T2*, cudaStream_t compute_stream);
-#endif
 
-static const char* c_OpDomain = "test.customop";
+static const char* c_OpDomain = "test";
 
-struct KernelOne {
+struct KernelChol {
   void Compute(OrtKernelContext* context) {
     // Setup inputs
     Ort::KernelContext ctx(context);
-    auto input_X = ctx.GetInput(0);
-    auto input_Y = ctx.GetInput(1);
-    const float* X = input_X.GetTensorData<float>();
-    const float* Y = input_Y.GetTensorData<float>();
+    auto input_a = ctx.GetInput(0);
+    const float* A = input_a.GetTensorData<float>();
+
+    // A - MxK matrix
+    auto dimensions = input_a.GetTensorTypeAndShapeInfo().GetShape();
+    int64_t M = dimensions[0];
+    int64_t K = dimensions[1];
+    if(M != K) {
+      ORT_CXX_API_THROW("Input matrix must be square.", ORT_FAIL);
+    }
+
+    // Convert from row-major to column-major format
+    arma::fmat A_mat(const_cast<float *>(A), M, K, false, true);
+    auto At = A_mat.t();
 
     // Setup output
-    auto dimensions = input_X.GetTensorTypeAndShapeInfo().GetShape();
-
     auto output = ctx.GetOutput(0, dimensions);
     float* out = output.GetTensorMutableData<float>();
 
+    // Compute Cholesky
+    // Return LOWER triangular matrix
+    // https://numpy.org/doc/stable/reference/generated/numpy.linalg.cholesky.html
+    // U = Upper-triangular Cholesky factor of A.
+    arma::fmat U = arma::chol(At, "upper");
+    float *U_mem = U.memptr();
+    
+    // Copy to output & transpose
     const size_t size = output.GetTensorTypeAndShapeInfo().GetElementCount();
-
-    // Do computation
-#ifdef USE_CUDA
-    cudaStream_t stream = reinterpret_cast<cudaStream_t>(ctx.GetGPUComputeStream());
-    cuda_add(size, out, X, Y, stream);
-#else
     for (size_t i = 0; i < size; i++) {
-      out[i] = X[i] + Y[i];
+      out[i] = U_mem[i] ;
     }
-#endif
+    
   }
 };
 
-struct CustomOpOne : Ort::CustomOpBase<CustomOpOne, KernelOne> {
+struct CholOpOne : Ort::CustomOpBase<CholOpOne, KernelChol> {
   void* CreateKernel(const OrtApi& /* api */, const OrtKernelInfo* /* info */) const {
-    return std::make_unique<KernelOne>().release();
+    return std::make_unique<KernelChol>().release();
   };
 
-  const char* GetName() const { return "CustomOpOne"; };
+  const char* GetName() const { return "CholOp"; };
 
 #ifdef USE_CUDA
   const char* GetExecutionProviderType() const { return "CUDAExecutionProvider"; };
 #endif
 
-  size_t GetInputTypeCount() const { return 2; };
+  size_t GetInputTypeCount() const { return 1; };
   ONNXTensorElementDataType GetInputType(size_t /*index*/) const { return ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT; };
 
   size_t GetOutputTypeCount() const { return 1; };
@@ -77,13 +85,13 @@ static void AddOrtCustomOpDomainToContainer(Ort::CustomOpDomain&& domain) {
 OrtStatus* ORT_API_CALL RegisterCustomOps(OrtSessionOptions* options, const OrtApiBase* api) {
   Ort::Global<void>::api_ = api->GetApi(ORT_API_VERSION);
 
-  static const CustomOpOne c_CustomOpOne;
+  static const CholOpOne c_CholOpOne;
 
   OrtStatus* result = nullptr;
 
   ORT_TRY {
     Ort::CustomOpDomain domain{c_OpDomain};
-    domain.Add(&c_CustomOpOne);
+    domain.Add(&c_CholOpOne);
 
     Ort::UnownedSessionOptions session_options(options);
     session_options.Add(domain);

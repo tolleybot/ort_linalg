@@ -1,44 +1,50 @@
-# A set of code samples showing different usage of the ONNX Runtime Python API
-# Copyright (c) Microsoft Corporation. All rights reserved.
-# Licensed under the MIT License.
+# Custom operator from PyTorch
+
 # Adapted from https://github.com/microsoft/onnxruntime-inference-examples/blob/main/python/api/onnxruntime-python-api.py
-# Added custom operator as described in: https://github.com/onnx/tutorials/blob/master/PyTorchCustomOperator/README.md
+# Added python custom operator as per: https://github.com/microsoft/onnxruntime-extensions/blob/main/docs/pyop.md
+# Original C++ custom operator as described in: https://github.com/onnx/tutorials/blob/master/PyTorchCustomOperator/README.md
 
-# Before running this call
-# python setup.py install
-# to compile custop_op_one.cpp file
 
-import os
 import numpy as np
 import torch
 import onnxruntime
+import onnxruntime_extensions as ortx
+
 
 torch.manual_seed(0)
-CUSTOM_OP_DOMAIN = 'test'
-CUSTOM_OP_VERSION = 1
+CUSTOM_OP_DOMAIN = 'ai.onnx.contrib'
+CUSTOM_OP_VERSION = 9  # Not sure what opset version to use, or if it matters
 MODEL_FILE = 'custom_op_test.onnx'
 DEVICE_NAME = 'cpu'
 DEVICE_INDEX = 0  # Replace this with the index of the device you want to run on
 DEVICE = f'{DEVICE_NAME}:{DEVICE_INDEX}'
 
 
+# Register custom operator implementation in python
+@ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_float])
+def linalg_cholesky(x):
+    return np.linalg.cholesky(x)
+
+
 def register_custom_op():
-    def custom_op_one(g, x):
-        return g.op(CUSTOM_OP_DOMAIN + "::CholOp", x)
+    def bind_custom_op_cholesky(g, x, upper):
+        return g.op("ai.onnx.contrib::linalg_cholesky", x)
 
     from torch.onnx import register_custom_op_symbolic
-    register_custom_op_symbolic(symbolic_name='mynamespace::custom_op_one', symbolic_fn=custom_op_one,
+    register_custom_op_symbolic(symbolic_name='aten::linalg_cholesky', symbolic_fn=bind_custom_op_cholesky,
                                 opset_version=CUSTOM_OP_VERSION)
 
 
 class CustomModel(torch.nn.Module):
     def forward(self, x):
-        return torch.ops.mynamespace.custom_op_one(x)
+        L = torch.linalg.cholesky(x)
+        return L
 
 
 def create_custom_model():
     dtype = torch.float32
-    sample_x = torch.ones(2, 2, dtype=dtype)
+    a = torch.randn(2, 2, dtype=dtype)
+    sample_x = a @ a.mT + 1e-3  # make symmetric positive-definite
     inputs = (sample_x)
 
     torch.onnx.export(CustomModel(), inputs, MODEL_FILE,
@@ -50,13 +56,8 @@ def create_custom_model():
 
 # Create an ONNX Runtime session with the provided model and custom ops library
 def create_session(model: str) -> onnxruntime.InferenceSession:
-    lib_dir = "../cmake-build-debug/linalg_op"
-    shared_library = lib_dir + "/libcustom_op_library.so"
-    if not os.path.exists(shared_library):
-        raise FileNotFoundError(f"Unable to find '{shared_library}'")
-
     so1 = onnxruntime.SessionOptions()
-    so1.register_custom_ops_library(shared_library)
+    so1.register_custom_ops_library(ortx.get_library_path())
 
     # Model loading successfully indicates that the custom op node could be resolved successfully
     providers = ['CPUExecutionProvider']
@@ -115,8 +116,6 @@ def run_with_torch_tensors_on_device(x: torch.Tensor, np_type: np.dtype = np.flo
 
 
 def main():
-    torch.ops.load_library(
-        "build/lib.linux-x86_64-cpython-310/custom_op_one.cpython-310-x86_64-linux-gnu.so")
     register_custom_op()
     create_custom_model()
 

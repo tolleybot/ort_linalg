@@ -6,6 +6,7 @@
 
 
 import numpy as np
+import scipy
 import torch
 import onnxruntime
 import onnxruntime_extensions as ortx
@@ -20,37 +21,80 @@ DEVICE_INDEX = 0  # Replace this with the index of the device you want to run on
 DEVICE = f'{DEVICE_NAME}:{DEVICE_INDEX}'
 
 
-# Register custom operator implementation in python
+# Register custom onnx-runtime implementations in python
+# This will be registered to the domain ai.onnx.contrib
 @ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_float])
 def linalg_cholesky(x):
     return np.linalg.cholesky(x)
 
 
+@ortx.onnx_op(op_type="linalg_solve_triangular",
+              inputs=[ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_float,
+                      ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool])
+def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
+    if(left != True):
+        raise RuntimeError('left = False is not supported for this implementation of solve_triangular')
+    x = scipy.linalg.solve_triangular(a, b, lower=not upper, unit_diagonal=unitriangular)
+    return x
+
+
+# Register the bindings from pytorch aten functions to implementations in onnx-runtime
 def register_custom_op():
     def bind_custom_op_cholesky(g, x, upper):
         return g.op("ai.onnx.contrib::linalg_cholesky", x)
 
+    def bind_custom_op_solve_triangular(g, a, b, upper, left, unittriangular):
+        return g.op("ai.onnx.contrib::linalg_solve_triangular", a, b, upper, left, unittriangular)
+
     from torch.onnx import register_custom_op_symbolic
     register_custom_op_symbolic(symbolic_name='aten::linalg_cholesky', symbolic_fn=bind_custom_op_cholesky,
                                 opset_version=CUSTOM_OP_VERSION)
+    register_custom_op_symbolic(symbolic_name='aten::linalg_solve_triangular', symbolic_fn=bind_custom_op_solve_triangular,
+                                opset_version=CUSTOM_OP_VERSION)
 
 
-class CustomModel(torch.nn.Module):
+class CustomModelCholesky(torch.nn.Module):
     def forward(self, x):
         L = torch.linalg.cholesky(x)
         return L
 
 
-def create_custom_model():
+def create_custom_model_cholesky():
     dtype = torch.float32
     a = torch.randn(2, 2, dtype=dtype)
     sample_x = a @ a.mT + 1e-3  # make symmetric positive-definite
     inputs = (sample_x)
 
-    torch.onnx.export(CustomModel(), inputs, MODEL_FILE,
+    torch.onnx.export(CustomModelCholesky(), inputs, MODEL_FILE,
                       opset_version=9,
                       input_names=["x"], output_names=["z"],
                       dynamic_axes={"x": {0: "rows_x", 1: "cols_x"}},
+                      custom_opsets={CUSTOM_OP_DOMAIN: CUSTOM_OP_VERSION})
+
+
+class CustomModelSolveTrianguler(torch.nn.Module):
+    def forward(self, a, b):
+        x = torch.linalg.solve_triangular(a, b, upper=False)
+        return x
+
+
+def create_custom_model_solve_triangular():
+    dtype = np.float32
+
+    a = np.array([[3, 0, 0, 0], [2, 1, 0, 0], [1, 0, 1, 0], [1, 1, 1, 1]], dtype=dtype)
+    b = np.array([4, 2, 4, 2], dtype=dtype)
+    b = np.reshape(b, (4, 1))
+    # x = solve_triangular(a, b, lower=True)
+    # x = array([1.33333333, -0.66666667, 2.66666667, -1.33333333])
+
+    sample_a = torch.from_numpy(a)
+    sample_b = torch.from_numpy(b)
+    inputs = (sample_a, sample_b)
+
+    torch.onnx.export(CustomModelSolveTrianguler(), inputs, MODEL_FILE,
+                      opset_version=9,
+                      input_names=["a", "b"], output_names=["x"],
+                      dynamic_axes={"a": {0: "rows_a", 1: "cols_a"}, "b": {0: "rows_b", 1: "cols_b"}},
                       custom_opsets={CUSTOM_OP_DOMAIN: CUSTOM_OP_VERSION})
 
 
@@ -67,24 +111,38 @@ def create_session(model: str) -> onnxruntime.InferenceSession:
 
 
 # Run the model from torch
-def run_pytorch(x: np.array) -> np.array:
-    model = CustomModel()
+def run_pytorch_chol(x: np.array) -> np.array:
+    model = CustomModelCholesky()
     model.eval()
     with torch.no_grad():
         z = model(x)
     return z
 
 
+def run_pytorch_solve(a: np.array, b: np.array) -> np.array:
+    model = CustomModelSolveTrianguler()
+    model.eval()
+    with torch.no_grad():
+        x = model(a, b)
+    return x
+
+
 # Run the model on CPU consuming and producing numpy arrays
-def run(x: np.array) -> np.array:
+def run_chol(x: np.array) -> np.array:
     session = create_session(MODEL_FILE)
     z = session.run(["z"], {"x": x})
     return z[0]
 
 
+def run_solve(a: np.array, b: np.array) -> np.array:
+    session = create_session(MODEL_FILE)
+    x = session.run(["x"], {"a": a, "b": b})
+    return x[0]
+
+
 # Run the model on device consuming and producing native PyTorch tensors
-def run_with_torch_tensors_on_device(x: torch.Tensor, np_type: np.dtype = np.float32,
-                                     torch_type: torch.dtype = torch.float32) -> torch.Tensor:
+def run_torch_device_chol(x: torch.Tensor, np_type: np.dtype = np.float32,
+                          torch_type: torch.dtype = torch.float32) -> torch.Tensor:
     session = create_session(MODEL_FILE)
 
     binding = session.io_binding()
@@ -115,9 +173,13 @@ def run_with_torch_tensors_on_device(x: torch.Tensor, np_type: np.dtype = np.flo
     return z_tensor
 
 
-def main():
+def print_sep():
+    print("################################################################################")
+
+def cholesky_test():
+    print_sep()
     register_custom_op()
-    create_custom_model()
+    create_custom_model_cholesky()
 
     A = np.array([[25, 15, -5],
                   [15, 18, 0],
@@ -134,14 +196,45 @@ def main():
     print(L)
 
     print("\nDirect pytorch run (copy matrix):")
-    print(run_pytorch(x=torch.from_numpy(A)))
+    print(run_pytorch_chol(x=torch.from_numpy(A)))
 
     print("\nRuntime invocation with numpy data:")
-    print(run(x=A))
+    print(run_chol(x=A))
 
     print("\nRuntime invocation with torch data:")
-    print(run_with_torch_tensors_on_device(torch.from_numpy(A)))
+    print(run_torch_device_chol(torch.from_numpy(A)))
+    print_sep()
+
+
+def triangular_solve_test():
+    print_sep()
+    register_custom_op()
+    create_custom_model_solve_triangular()
+
+    a = np.array([[3, 0, 0, 0], [2, 1, 0, 0], [1, 0, 1, 0], [1, 1, 1, 1]], dtype=np.float32)
+    b = np.array([4, 2, 4, 2], dtype=np.float32)
+    b = np.reshape(b, (4, 1))
+    x = scipy.linalg.solve_triangular(a, b, lower=True)
+
+    # x = array([1.33333333, -0.66666667, 2.66666667, -1.33333333])
+    # print(a.dot(x))  # Check the result
+    # array([4., 2., 4., 2.])
+
+    print("Expected solve_triangular output:")
+    print(x)
+
+    print("\nDirect pytorch run (copy matrix):")
+    print(run_pytorch_solve(torch.from_numpy(a), torch.from_numpy(b)))
+
+    print("\nRuntime invocation with numpy data:")
+    print(run_solve(a, b))
+
+    print_sep()
 
 
 if __name__ == "__main__":
-    main()
+    triangular_solve_test()
+    print()
+    cholesky_test()
+
+

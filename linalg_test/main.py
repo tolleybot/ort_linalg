@@ -11,7 +11,7 @@ import torch
 import onnxruntime
 import onnxruntime_extensions as ortx
 
-
+# Global settings
 torch.manual_seed(0)
 CUSTOM_OP_DOMAIN = 'ai.onnx.contrib'
 CUSTOM_OP_VERSION = 9  # Not sure what opset version to use, or if it matters
@@ -32,14 +32,14 @@ def linalg_cholesky(x):
               inputs=[ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_float,
                       ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool])
 def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
-    if(left != True):
+    if (left != True):
         raise RuntimeError('left = False is not supported for this implementation of solve_triangular')
     x = scipy.linalg.solve_triangular(a, b, lower=not upper, unit_diagonal=unitriangular)
     return x
 
 
 # Register the bindings from pytorch aten functions to implementations in onnx-runtime
-def register_custom_op():
+def register_custom_ops():
     def bind_custom_op_cholesky(g, x, upper):
         return g.op("ai.onnx.contrib::linalg_cholesky", x)
 
@@ -49,7 +49,8 @@ def register_custom_op():
     from torch.onnx import register_custom_op_symbolic
     register_custom_op_symbolic(symbolic_name='aten::linalg_cholesky', symbolic_fn=bind_custom_op_cholesky,
                                 opset_version=CUSTOM_OP_VERSION)
-    register_custom_op_symbolic(symbolic_name='aten::linalg_solve_triangular', symbolic_fn=bind_custom_op_solve_triangular,
+    register_custom_op_symbolic(symbolic_name='aten::linalg_solve_triangular',
+                                symbolic_fn=bind_custom_op_solve_triangular,
                                 opset_version=CUSTOM_OP_VERSION)
 
 
@@ -176,9 +177,10 @@ def run_torch_device_chol(x: torch.Tensor, np_type: np.dtype = np.float32,
 def print_sep():
     print("################################################################################")
 
+
 def cholesky_test():
     print_sep()
-    register_custom_op()
+    register_custom_ops()
     create_custom_model_cholesky()
 
     A = np.array([[25, 15, -5],
@@ -208,7 +210,7 @@ def cholesky_test():
 
 def triangular_solve_test():
     print_sep()
-    register_custom_op()
+    register_custom_ops()
     create_custom_model_solve_triangular()
 
     a = np.array([[3, 0, 0, 0], [2, 1, 0, 0], [1, 0, 1, 0], [1, 1, 1, 1]], dtype=np.float32)
@@ -236,5 +238,3 @@ if __name__ == "__main__":
     triangular_solve_test()
     print()
     cholesky_test()
-
-

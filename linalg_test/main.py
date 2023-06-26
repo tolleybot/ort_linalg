@@ -47,8 +47,11 @@ def register_custom_ops():
         return g.op("ai.onnx.contrib::linalg_solve_triangular", a, b, upper, left, unittriangular)
 
     from torch.onnx import register_custom_op_symbolic
-    register_custom_op_symbolic(symbolic_name='aten::linalg_cholesky', symbolic_fn=bind_custom_op_cholesky,
+
+    register_custom_op_symbolic(symbolic_name='aten::linalg_cholesky',
+                                symbolic_fn=bind_custom_op_cholesky,
                                 opset_version=CUSTOM_OP_VERSION)
+
     register_custom_op_symbolic(symbolic_name='aten::linalg_solve_triangular',
                                 symbolic_fn=bind_custom_op_solve_triangular,
                                 opset_version=CUSTOM_OP_VERSION)

@@ -5,57 +5,19 @@
 # Original C++ custom operator as described in: https://github.com/onnx/tutorials/blob/master/PyTorchCustomOperator/README.md
 
 
-import numpy as np
-import scipy
 import torch
-import onnxruntime
-import onnxruntime_extensions as ortx
+
+from custom_ops import *
 
 # Global settings
 torch.manual_seed(0)
-CUSTOM_OP_DOMAIN = 'ai.onnx.contrib'
-CUSTOM_OP_VERSION = 9  # Not sure what opset version to use, or if it matters
 MODEL_FILE = 'custom_op_test.onnx'
 DEVICE_NAME = 'cpu'
 DEVICE_INDEX = 0  # Replace this with the index of the device you want to run on
 DEVICE = f'{DEVICE_NAME}:{DEVICE_INDEX}'
 
-
-# Register custom onnx-runtime implementations in python
-# This will be registered to the domain ai.onnx.contrib
-@ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_float])
-def linalg_cholesky(x):
-    return np.linalg.cholesky(x)
-
-
-@ortx.onnx_op(op_type="linalg_solve_triangular",
-              inputs=[ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_float,
-                      ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool])
-def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
-    if (left != True):
-        raise RuntimeError('left = False is not supported for this implementation of solve_triangular')
-    x = scipy.linalg.solve_triangular(a, b, lower=not upper, unit_diagonal=unitriangular)
-    return x
-
-
-# Register the bindings from pytorch aten functions to implementations in onnx-runtime
-def register_custom_ops():
-    def bind_custom_op_cholesky(g, x, upper):
-        return g.op("ai.onnx.contrib::linalg_cholesky", x)
-
-    def bind_custom_op_solve_triangular(g, a, b, upper, left, unittriangular):
-        return g.op("ai.onnx.contrib::linalg_solve_triangular", a, b, upper, left, unittriangular)
-
-    from torch.onnx import register_custom_op_symbolic
-
-    register_custom_op_symbolic(symbolic_name='aten::linalg_cholesky',
-                                symbolic_fn=bind_custom_op_cholesky,
-                                opset_version=CUSTOM_OP_VERSION)
-
-    register_custom_op_symbolic(symbolic_name='aten::linalg_solve_triangular',
-                                symbolic_fn=bind_custom_op_solve_triangular,
-                                opset_version=CUSTOM_OP_VERSION)
-
+verbose = False
+verboseprint = print if verbose else lambda *a, **k: None
 
 class CustomModelCholesky(torch.nn.Module):
     def forward(self, x):
@@ -100,18 +62,6 @@ def create_custom_model_solve_triangular():
                       input_names=["a", "b"], output_names=["x"],
                       dynamic_axes={"a": {0: "rows_a", 1: "cols_a"}, "b": {0: "rows_b", 1: "cols_b"}},
                       custom_opsets={CUSTOM_OP_DOMAIN: CUSTOM_OP_VERSION})
-
-
-# Create an ONNX Runtime session with the provided model and custom ops library
-def create_session(model: str) -> onnxruntime.InferenceSession:
-    so1 = onnxruntime.SessionOptions()
-    so1.register_custom_ops_library(ortx.get_library_path())
-
-    # Model loading successfully indicates that the custom op node could be resolved successfully
-    providers = ['CPUExecutionProvider']
-    sess1 = onnxruntime.InferenceSession(model, so1, providers=providers)
-
-    return sess1
 
 
 # Run the model from torch
@@ -178,10 +128,10 @@ def run_torch_device_chol(x: torch.Tensor, np_type: np.dtype = np.float32,
 
 
 def print_sep():
-    print("################################################################################")
+    verboseprint("################################################################################")
 
 
-def cholesky_test():
+def test_cholesky():
     print_sep()
     register_custom_ops()
     create_custom_model_cholesky()
@@ -197,21 +147,29 @@ def cholesky_test():
                   [-1., 1., 3.]]
                  , dtype=np.float32)
 
-    print("Expected Cholesky output:")
-    print(L)
+    torch_L = torch.from_numpy(L)
 
-    print("\nDirect pytorch run (copy matrix):")
-    print(run_pytorch_chol(x=torch.from_numpy(A)))
+    verboseprint("Expected Cholesky output:")
+    verboseprint(L)
 
-    print("\nRuntime invocation with numpy data:")
-    print(run_chol(x=A))
+    verboseprint("\nDirect pytorch run (copy matrix):")
+    direct = run_pytorch_chol(x=torch.from_numpy(A))
+    verboseprint(direct)
+    assert torch.allclose(direct, torch_L)
 
-    print("\nRuntime invocation with torch data:")
-    print(run_torch_device_chol(torch.from_numpy(A)))
+    verboseprint("\nRuntime invocation with numpy data:")
+    numpy_onnx = run_chol(x=A)
+    verboseprint(numpy_onnx)
+    assert np.allclose(numpy_onnx, L)
+
+    verboseprint("\nRuntime invocation with torch data:")
+    torch_onnx = run_torch_device_chol(torch.from_numpy(A))
+    verboseprint(torch_onnx)
+    assert torch.allclose(torch_onnx, torch_L)
     print_sep()
 
 
-def triangular_solve_test():
+def test_triangular_solve():
     print_sep()
     register_custom_ops()
     create_custom_model_solve_triangular()
@@ -221,23 +179,26 @@ def triangular_solve_test():
     b = np.reshape(b, (4, 1))
     x = scipy.linalg.solve_triangular(a, b, lower=True)
 
+    torch_a = torch.from_numpy(a)
+    torch_b = torch.from_numpy(b)
+    torch_x = torch.from_numpy(x)
+
     # x = array([1.33333333, -0.66666667, 2.66666667, -1.33333333])
-    # print(a.dot(x))  # Check the result
+    # verboseprint(a.dot(x))  # Check the result
     # array([4., 2., 4., 2.])
 
-    print("Expected solve_triangular output:")
-    print(x)
+    verboseprint("Expected solve_triangular output:")
+    verboseprint(x)
 
-    print("\nDirect pytorch run (copy matrix):")
-    print(run_pytorch_solve(torch.from_numpy(a), torch.from_numpy(b)))
+    verboseprint("\nDirect pytorch run (copy matrix):")
+    direct = run_pytorch_solve(torch.from_numpy(a), torch.from_numpy(b))
+    verboseprint(direct)
+    assert torch.allclose(direct, torch_x)
 
-    print("\nRuntime invocation with numpy data:")
-    print(run_solve(a, b))
+    verboseprint("\nRuntime invocation with numpy data:")
+    numpy_onnx = run_solve(a, b)
+    verboseprint(numpy_onnx)
+    assert np.allclose(numpy_onnx, x)
 
     print_sep()
 
-
-if __name__ == "__main__":
-    triangular_solve_test()
-    print()
-    cholesky_test()

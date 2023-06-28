@@ -54,7 +54,7 @@ def numpy_transpose(x):
 def numpy_diag_embed(x, offset=0, dim1=- 2, dim2=- 1):
     new = np.zeros(x.shape, x.dtype)
     np.fill_diagonal(new, x.diagonal())
-    return np.transpose(x, axes=(-2, -1))
+    return new
 
 
 # Register the bindings from pytorch aten functions to implementations in onnx-runtime

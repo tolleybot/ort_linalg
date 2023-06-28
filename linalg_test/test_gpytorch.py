@@ -1,11 +1,7 @@
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Optional
 
 import gpytorch
 import gpytorch.variational
-import onnxruntime as ort
-import torch
 from gpytorch.constraints import GreaterThan
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.settings import _linalg_dtype_cholesky, trace_mode
@@ -18,6 +14,16 @@ from custom_ops import *
 
 MODEL_FILE = 'gp_test.onnx'
 
+# Create an ONNX Runtime session with the provided model and custom ops library
+def create_session(model: str) -> onnxruntime.InferenceSession:
+    so1 = onnxruntime.SessionOptions()
+    so1.register_custom_ops_library(ortx.get_library_path())
+
+    # Model loading successfully indicates that the custom op node could be resolved successfully
+    providers = ['CPUExecutionProvider']
+    sess1 = onnxruntime.InferenceSession(model, so1, providers=providers)
+
+    return sess1
 
 class PatchedMatmulLinearOperator(MatmulLinearOperator):
     def _diagonal(self) -> torch.Tensor:
@@ -140,15 +146,41 @@ class ONNXWrapperModel(torch.nn.Module):
         return output.mean, output.variance
 
 
-def export_gp(model):
+
+class ApproximateGPSimple(gpytorch.models.ApproximateGP):
+    def __init__(self, inducing_points):
+        variational_distribution = gpytorch.variational.CholeskyVariationalDistribution(inducing_points.shape[0])
+        variational_strategy = gpytorch.variational.VariationalStrategy(
+            self, inducing_points, variational_distribution, learn_inducing_locations=True, jitter_val=1e-12
+        )
+        super().__init__(variational_strategy)
+        self.mean_module = gpytorch.means.ConstantMean()
+        self.covar_module = gpytorch.kernels.MaternKernel()
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+class ONNXWrapperModelSimple(torch.nn.Module):
+    def __init__(self, model) -> None:
+        super().__init__()
+        self.model = model
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        output = self.model.variational_strategy(x)
+        return output.mean, output.variance
+
+
+def export_gp(onnx_model):
     register_custom_ops()
     sample_x = torch.zeros((10, 1))
     inputs = (sample_x)
-    onnx_model = ONNXWrapperModel(model)
 
     with torch.no_grad():
         torch_script_graph, unconvertible_ops = torch.onnx.utils.unconvertible_ops(
-            ONNXWrapperModel(model), inputs
+            onnx_model, inputs
         )
         print("Unconvertible Ops:")
         print(unconvertible_ops)
@@ -190,6 +222,7 @@ def test_gp():
     means = means[1:]
     print('Train MAE: {}'.format(torch.mean(torch.abs(means - Y.cpu()))))
 
+    # ONNX tests
     dummy_input = torch.zeros((10, 1))
     onnx_model = ONNXWrapperModel(model)
 
@@ -200,7 +233,7 @@ def test_gp():
         print()
 
     # Export model
-    export_gp(model)
+    export_gp(onnx_model)
 
     # Run model
     session = create_session(MODEL_FILE)

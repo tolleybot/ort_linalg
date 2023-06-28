@@ -21,6 +21,18 @@ DEVICE_INDEX = 0  # Replace this with the index of the device you want to run on
 DEVICE = f'{DEVICE_NAME}:{DEVICE_INDEX}'
 
 
+def torch_dtype_to_numpy_dtype(dtype : torch.dtype)->np.dtype:
+    """ Convert a torch dtype to a numpy dtype"""
+    if dtype == torch.float32:
+        return np.float32
+    elif dtype == torch.int32:
+        return np.int32
+    elif dtype == torch.int64:
+        return np.int64
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
+
 # Register custom onnx-runtime implementations in python
 # This will be registered to the domain ai.onnx.contrib
 @ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_float])
@@ -37,6 +49,23 @@ def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
     x = scipy.linalg.solve_triangular(a, b, lower=not upper, unit_diagonal=unitriangular)
     return x
 
+@ortx.onnx_op(op_type="bitwise_left_shift", inputs=[ortx.PyCustomOpDef.dt_int32, ortx.PyCustomOpDef.dt_int32],
+              outputs=[ortx.PyCustomOpDef.dt_int32])
+def bitwise_left_shift(a, b):
+    """ custom operator for bitwise left shift"""
+    return a << b
+
+@ortx.onnx_op(op_type="bitwise_right_shift", inputs=[ortx.PyCustomOpDef.dt_int32, ortx.PyCustomOpDef.dt_int32],
+              outputs=[ortx.PyCustomOpDef.dt_int32])
+def bitwise_right_shift(a, b):
+    """ custom operator for bitwise right shift"""
+    return a >> b
+
+@ortx.onnx_op(op_type="flatten", inputs=[ortx.PyCustomOpDef.dt_float],
+              outputs=[ortx.PyCustomOpDef.dt_float])
+def flatten(a):
+    """ custom operator for flatten"""
+    return a.flatten()    
 
 # Register the bindings from pytorch aten functions to implementations in onnx-runtime
 def register_custom_ops():
@@ -45,6 +74,9 @@ def register_custom_ops():
 
     def bind_custom_op_solve_triangular(g, a, b, upper, left, unittriangular):
         return g.op("ai.onnx.contrib::linalg_solve_triangular", a, b, upper, left, unittriangular)
+    
+    def bind_custom_op_bitwise_left_shift(g, a, b):
+        return g.op("ai.onnx.contrib::bitwise_left_shift", a, b)
 
     from torch.onnx import register_custom_op_symbolic
 
@@ -55,6 +87,12 @@ def register_custom_ops():
     register_custom_op_symbolic(symbolic_name='aten::linalg_solve_triangular',
                                 symbolic_fn=bind_custom_op_solve_triangular,
                                 opset_version=CUSTOM_OP_VERSION)
+    
+    register_custom_op_symbolic(symbolic_name='aten::bitwise_left_shift',
+                                symbolic_fn=bind_custom_op_bitwise_left_shift,
+                                opset_version=CUSTOM_OP_VERSION)
+    
+
 
 
 class CustomModelCholesky(torch.nn.Module):
@@ -100,6 +138,24 @@ def create_custom_model_solve_triangular():
                       input_names=["a", "b"], output_names=["x"],
                       dynamic_axes={"a": {0: "rows_a", 1: "cols_a"}, "b": {0: "rows_b", 1: "cols_b"}},
                       custom_opsets={CUSTOM_OP_DOMAIN: CUSTOM_OP_VERSION})
+    
+
+class CustomModelBitwiseShiftLeft(torch.nn.Module):
+    def forward(self, a, b):
+        x = torch.bitwise_left_shift(a, b)
+        return x
+
+
+def create_custom_model_bitwise_left_shift():
+    dtype = torch.int32
+
+    inputs = (torch.tensor([16, 4, 1], dtype=dtype), torch.tensor(1, dtype=dtype))
+
+    torch.onnx.export(CustomModelBitwiseShiftLeft(), inputs, MODEL_FILE,
+                      opset_version=9,
+                      input_names=["a", "b"], output_names=["x"],
+                      dynamic_axes={"a": {0: "rows_a"}},
+                      custom_opsets={CUSTOM_OP_DOMAIN: CUSTOM_OP_VERSION})
 
 
 # Create an ONNX Runtime session with the provided model and custom ops library
@@ -141,6 +197,13 @@ def run_chol(x: np.array) -> np.array:
 def run_solve(a: np.array, b: np.array) -> np.array:
     session = create_session(MODEL_FILE)
     x = session.run(["x"], {"a": a, "b": b})
+    return x[0]
+
+def run_bitwise_shift_left(a: np.array, b: np.array) -> np.array:
+    session = create_session(MODEL_FILE)
+    a = a.numpy()  # Convert the PyTorch tensor to a numpy array
+    b = b.numpy()  # Convert the PyTorch tensor to a numpy array
+    x = session.run(None, {"a": a, "b": b}) 
     return x[0]
 
 
@@ -236,8 +299,29 @@ def triangular_solve_test():
 
     print_sep()
 
+def bitwise_left_shift_test():
+    print_sep()
+    register_custom_ops()
+    create_custom_model_bitwise_left_shift()
+
+    a = np.random.randint(0, 10, size=(3,), dtype=np.int32)   
+    b = np.array(1, dtype=np.int32)
+    x = np.left_shift(a, b)
+
+    print("Expected bitwise_left_shift output:")
+    print(x)
+
+    print("\nDirect pytorch run (copy matrix):")
+    print(run_bitwise_shift_left(torch.from_numpy(a), torch.from_numpy(b)))
+
+    print("\nRuntime invocation with numpy data:")
+    print(run_solve(a, b))
+
+    print_sep()
 
 if __name__ == "__main__":
-    triangular_solve_test()
+   # triangular_solve_test()
+   # print()
+   # cholesky_test()
+    bitwise_left_shift_test()
     print()
-    cholesky_test()

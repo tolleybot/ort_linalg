@@ -18,13 +18,15 @@ CUSTOM_OP_VERSION = 9  # Not sure what opset version to use, or if it matters
 
 # Register custom onnx-runtime implementations in python
 # This will be registered to the domain ai.onnx.contrib
-@ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_float])
+@ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_double],
+              outputs=[ortx.PyCustomOpDef.dt_double])
 def linalg_cholesky(x):
-    return np.linalg.cholesky(x)
+    L = np.linalg.cholesky(x)
+    return L
 
 
-@ortx.onnx_op(op_type="linalg_cholesky_ex", inputs=[ortx.PyCustomOpDef.dt_float],
-              outputs=[ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_int32])
+@ortx.onnx_op(op_type="linalg_cholesky_ex", inputs=[ortx.PyCustomOpDef.dt_double],
+              outputs=[ortx.PyCustomOpDef.dt_double, ortx.PyCustomOpDef.dt_int32])
 def linalg_cholesky_ex(x):
     L = np.linalg.cholesky(x)
     info = np.zeros(1, dtype=torch.int32)
@@ -32,8 +34,9 @@ def linalg_cholesky_ex(x):
 
 
 @ortx.onnx_op(op_type="linalg_solve_triangular",
-              inputs=[ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_float,
-                      ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool])
+              inputs=[ortx.PyCustomOpDef.dt_double, ortx.PyCustomOpDef.dt_double,
+                      ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_bool],
+              outputs=[ortx.PyCustomOpDef.dt_double])
 def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
     if (left != True):
         raise RuntimeError('left = False is not supported for this implementation of solve_triangular')
@@ -41,19 +44,43 @@ def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
     return x
 
 
-@ortx.onnx_op(op_type="numpy_transpose", inputs=[ortx.PyCustomOpDef.dt_float])
+@ortx.onnx_op(op_type="numpy_transpose", inputs=[ortx.PyCustomOpDef.dt_float], outputs=[ortx.PyCustomOpDef.dt_float])
 def numpy_transpose(x):
     return np.transpose(x, axes=(-2, -1))
 
+
+rem = """
+Tensor diag_embed(const Tensor& self, int64_t offset, int64_t dim1_, int64_t dim2_) {
+  int64_t nDims = self.dim() + 1;
+  int64_t dim1 = maybe_wrap_dim(dim1_, nDims);
+  int64_t dim2 = maybe_wrap_dim(dim2_, nDims);
+  TORCH_CHECK(dim1 != dim2, "diagonal dimensions cannot be identical ", dim1_, ", ", dim2_);
+  int64_t new_dim_len = std::abs(offset) + self.size(-1);
+  auto sizes = self.sizes().vec();
+  sizes.pop_back();
+  sizes.insert(sizes.begin() + std::min(dim1, dim2), new_dim_len);
+  sizes.insert(sizes.begin() + std::max(dim1, dim2), new_dim_len);
+  auto result = at::zeros(sizes, self.options());
+  auto diag = result.diagonal(offset, dim1, dim2);
+  diag.copy_(self);
+  return result;
+}
+"""
 
 @ortx.onnx_op(op_type="numpy_diag_embed",
               inputs=[ortx.PyCustomOpDef.dt_float,
                       ortx.PyCustomOpDef.dt_int64,
                       ortx.PyCustomOpDef.dt_int64,
-                      ortx.PyCustomOpDef.dt_int64])
+                      ortx.PyCustomOpDef.dt_int64],
+              outputs=[ortx.PyCustomOpDef.dt_float])
 def numpy_diag_embed(x, offset=0, dim1=- 2, dim2=- 1):
-    new = np.zeros(x.shape, x.dtype)
-    np.fill_diagonal(new, x.diagonal())
+    if x.ndim > 1:
+        new = np.zeros_like(x)
+        np.fill_diagonal(new, x.diagonal())
+    else:
+        new = np.zeros((x.shape[0], x.shape[0]), dtype=x.dtype)
+        np.fill_diagonal(new, x)
+
     return new
 
 

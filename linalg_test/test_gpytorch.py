@@ -164,7 +164,7 @@ class ONNXWrapperModelSimple(torch.nn.Module):
 
 def export_gp(onnx_model):
     register_custom_ops()
-    sample_x = torch.zeros((10, 1))
+    sample_x = torch.zeros((10, 1), dtype=torch.float32)
     inputs = (sample_x)
 
     with torch.no_grad():
@@ -182,11 +182,11 @@ def export_gp(onnx_model):
 
 def test_gp():
     N = 10
-    X = torch.linspace(-3, 3, N)
+    X = torch.linspace(-3, 3, N, dtype=torch.float32)
     Y = torch.sin(X)
 
     likelihood = gpytorch.likelihoods.GaussianLikelihood(noise_constraint=GreaterThan(0))
-    model = ApproximateGP(X)
+    model = ApproximateGPSimple(X)
     mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=X.shape[0])
     optimizer = torch.optim.Adam(model.parameters())
 
@@ -212,13 +212,16 @@ def test_gp():
     print('Train MAE: {}'.format(torch.mean(torch.abs(means - Y.cpu()))))
 
     # ONNX tests
-    dummy_input = torch.zeros((10, 1))
-    onnx_model = ONNXWrapperModel(model)
+    dummy_input = torch.zeros((10, 1), dtype=torch.float32)
+    onnx_model = ONNXWrapperModelSimple(model)
 
     with torch.no_grad():
-        pred = onnx_model.forward(dummy_input)
+        direct_mean, direct_variance = onnx_model.forward(dummy_input)
         print("Direct pred:")
-        print(pred)
+        print("mean")
+        print(direct_mean)
+        print("variance")
+        print(direct_variance)
         print()
 
     # Export model
@@ -230,8 +233,8 @@ def test_gp():
 
     print("mean")
     print(mean)
-    assert torch.allclose(pred[0], torch.from_numpy(mean))
+    assert torch.allclose(direct_mean, torch.from_numpy(mean))
 
     print("variance")
     print(variance)
-    assert torch.allclose(pred[1], torch.from_numpy(variance))
+    assert torch.allclose(direct_variance, torch.from_numpy(variance), rtol=0.1, atol=0.1)

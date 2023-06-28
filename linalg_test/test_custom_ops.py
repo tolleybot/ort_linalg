@@ -26,7 +26,7 @@ class CustomModelCholesky(torch.nn.Module):
 
 
 def create_custom_model_cholesky():
-    dtype = torch.float32
+    dtype = torch.double
     a = torch.randn(2, 2, dtype=dtype)
     sample_x = a @ a.mT + 1e-3  # make symmetric positive-definite
     inputs = (sample_x)
@@ -45,7 +45,7 @@ class CustomModelSolveTrianguler(torch.nn.Module):
 
 
 def create_custom_model_solve_triangular():
-    dtype = np.float32
+    dtype = np.double
 
     a = np.array([[3, 0, 0, 0], [2, 1, 0, 0], [1, 0, 1, 0], [1, 1, 1, 1]], dtype=dtype)
     b = np.array([4, 2, 4, 2], dtype=dtype)
@@ -95,8 +95,8 @@ def run_solve(a: np.array, b: np.array) -> np.array:
 
 
 # Run the model on device consuming and producing native PyTorch tensors
-def run_torch_device_chol(x: torch.Tensor, np_type: np.dtype = np.float32,
-                          torch_type: torch.dtype = torch.float32) -> torch.Tensor:
+def run_torch_device_chol(x: torch.Tensor, np_type: np.dtype = np.double,
+                          torch_type: torch.dtype = torch.double) -> torch.Tensor:
     session = create_session(MODEL_FILE)
 
     binding = session.io_binding()
@@ -139,13 +139,13 @@ def test_cholesky():
     A = np.array([[25, 15, -5],
                   [15, 18, 0],
                   [-5, 0, 11]]
-                 , dtype=np.float32)
+                 , dtype=np.double)
 
     # Expected output
     L = np.array([[5., 0., 0.],
                   [3., 3., 0.],
                   [-1., 1., 3.]]
-                 , dtype=np.float32)
+                 , dtype=np.double)
 
     torch_L = torch.from_numpy(L)
 
@@ -174,8 +174,8 @@ def test_triangular_solve():
     register_custom_ops()
     create_custom_model_solve_triangular()
 
-    a = np.array([[3, 0, 0, 0], [2, 1, 0, 0], [1, 0, 1, 0], [1, 1, 1, 1]], dtype=np.float32)
-    b = np.array([4, 2, 4, 2], dtype=np.float32)
+    a = np.array([[3, 0, 0, 0], [2, 1, 0, 0], [1, 0, 1, 0], [1, 1, 1, 1]], dtype=np.double)
+    b = np.array([4, 2, 4, 2], dtype=np.double)
     b = np.reshape(b, (4, 1))
     x = scipy.linalg.solve_triangular(a, b, lower=True)
 

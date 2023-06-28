@@ -8,6 +8,9 @@
 import numpy as np
 import scipy
 import torch
+import torch
+import torch.nn.functional as F
+import math
 import onnxruntime
 import onnxruntime_extensions as ortx
 
@@ -65,7 +68,22 @@ def bitwise_right_shift(a, b):
               outputs=[ortx.PyCustomOpDef.dt_float])
 def flatten(a):
     """ custom operator for flatten"""
-    return a.flatten()    
+    return a.flatten()  
+
+@ortx.onnx.op(op_type="scaled_dot_product_attention", inputs=[ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_bool, ortx.PyCustomOpDef.dt_float, ortx.PyCustomOpDef.dt_bool],)
+def scaled_dot_product_attention(q, k, v, attn_mask=None, is_causal=False, dropout_p=0.0):
+    """ custom operator for scaled dot product attention"""
+    if is_causal:
+        attn_mask = torch.ones(q.size(0), k.size(0), dtype=torch.bool).tril(diagonal=0)
+        attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
+    elif attn_mask is not None:
+        attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
+    else:
+        attn_mask = torch.zeros_like(q @ k.transpose(-2, -1))
+
+    attn_weight = torch.softmax((q @ k.transpose(-2, -1) / math.sqrt(q.size(-1))) + attn_mask, dim=-1)
+    attn_weight = F.dropout(attn_weight, dropout_p)
+    return attn_weight @ v
 
 # Register the bindings from pytorch aten functions to implementations in onnx-runtime
 def register_custom_ops():
@@ -77,6 +95,15 @@ def register_custom_ops():
     
     def bind_custom_op_bitwise_left_shift(g, a, b):
         return g.op("ai.onnx.contrib::bitwise_left_shift", a, b)
+    
+    def bind_custom_op_bitwise_right_shift(g, a, b):
+        return g.op("ai.onnx.contrib::bitwise_right_shift", a, b)
+    
+    def bind_custom_op_flatten(g, a):
+        return g.op("ai.onnx.contrib::flatten", a)    
+        
+    def bind_custom_op_scaled_dot_product_attention(g, q, k, v, attn_mask, is_causal, dropout_p):
+        return g.op("ai.onnx.contrib::scaled_dot_product_attention", q, k, v, attn_mask, is_causal, dropout_p)
 
     from torch.onnx import register_custom_op_symbolic
 
@@ -92,7 +119,18 @@ def register_custom_ops():
                                 symbolic_fn=bind_custom_op_bitwise_left_shift,
                                 opset_version=CUSTOM_OP_VERSION)
     
+    register_custom_op_symbolic(symbolic_name='aten::bitwise_right_shift',
+                                symbolic_fn=bind_custom_op_bitwise_right_shift,
+                                opset_version=CUSTOM_OP_VERSION)
+    
+    register_custom_op_symbolic(symbolic_name='aten::flatten',
+                                symbolic_fn=bind_custom_op_flatten,
+                                opset_version=CUSTOM_OP_VERSION)
 
+    register_custom_op_symbolic(symbolic_name='aten::scaled_dot_product_attention',
+                                symbolic_fn=bind_custom_op_scaled_dot_product_attention,
+                                opset_version=CUSTOM_OP_VERSION)
+    
 
 
 class CustomModelCholesky(torch.nn.Module):
@@ -319,9 +357,80 @@ def bitwise_left_shift_test():
 
     print_sep()
 
+def scaled_dot_product_attention_test():
+    import torch
+    import torch.nn as nn
+    import math
+    import onnx
+    import onnxruntime
+
+    class SimpleTransformer(nn.Module):
+        def __init__(self, dim, dropout_p=0.0, is_causal=False):
+            super(SimpleTransformer, self).__init__()
+            self.dim = dim
+            self.dropout_p = dropout_p
+            self.is_causal = is_causal
+            self.q_linear = nn.Linear(dim, dim)
+            self.k_linear = nn.Linear(dim, dim)
+            self.v_linear = nn.Linear(dim, dim)
+
+        def scaled_dot_product_attention(self, q, k, v, attn_mask=None):
+            if self.is_causal:
+                attn_mask = torch.ones(q.size(0), k.size(0), dtype=torch.bool).tril(diagonal=0)
+                attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
+            elif attn_mask is not None:
+                attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
+            else:
+                attn_mask = torch.zeros_like(q @ k.transpose(-2, -1))
+
+            attn_weight = torch.softmax((q @ k.transpose(-2, -1) / math.sqrt(q.size(-1))) + attn_mask, dim=-1)
+            attn_weight = nn.functional.dropout(attn_weight, self.dropout_p)
+            return attn_weight @ v
+
+        def forward(self, x):
+            q = self.q_linear(x)
+            k = self.k_linear(x)
+            v = self.v_linear(x)
+            return self.scaled_dot_product_attention(q, k, v)
+
+    # Create an instance of the model
+    model = SimpleTransformer(dim=512)
+
+    # Create some random input data
+    x = torch.randn(1, 10, 512)
+
+    # Specify the path to the output ONNX file
+    onnx_file_path = "simple_transformer.onnx"
+
+    # Export the model to an ONNX file
+    torch.onnx.export(model, x, onnx_file_path, input_names=["input"], output_names=["output"])
+
+    # Run the input data through the PyTorch model
+    pytorch_output = model(x)
+
+    # Load the ONNX model
+    onnx_model = onnx.load(onnx_file_path)
+
+    # Check the model
+    onnx.checker.check_model(onnx_model)
+
+    # Run the input data through the ONNX model
+    ort_session = onnxruntime.InferenceSession(onnx_file_path)
+    ort_inputs = {ort_session.get_inputs()[0].name: x.numpy()}
+    onnx_output = ort_session.run(None, ort_inputs)[0]
+
+    print(f"Pytorch output: {pytorch_output}")
+    print(f"Onnx output: {onnx_output}")
+
+    # Compare the output of the PyTorch model with the output of the ONNX model
+    print(torch.allclose(torch.from_numpy(onnx_output), pytorch_output, atol=1e-05))
+
+
+
 if __name__ == "__main__":
    # triangular_solve_test()
    # print()
    # cholesky_test()
-    bitwise_left_shift_test()
+    #bitwise_left_shift_test()
+    scaled_dot_product_attention_test()
     print()

@@ -14,16 +14,6 @@ from custom_ops import *
 
 MODEL_FILE = 'gp_test.onnx'
 
-# Create an ONNX Runtime session with the provided model and custom ops library
-def create_session(model: str) -> onnxruntime.InferenceSession:
-    so1 = onnxruntime.SessionOptions()
-    so1.register_custom_ops_library(ortx.get_library_path())
-
-    # Model loading successfully indicates that the custom op node could be resolved successfully
-    providers = ['CPUExecutionProvider']
-    sess1 = onnxruntime.InferenceSession(model, so1, providers=providers)
-
-    return sess1
 
 class PatchedMatmulLinearOperator(MatmulLinearOperator):
     def _diagonal(self) -> torch.Tensor:
@@ -144,7 +134,6 @@ class ONNXWrapperModel(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         output = self.model.variational_strategy(x)
         return output.mean, output.variance
-
 
 
 class ApproximateGPSimple(gpytorch.models.ApproximateGP):

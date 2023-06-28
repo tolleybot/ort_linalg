@@ -14,6 +14,7 @@ import onnxruntime_extensions as ortx
 CUSTOM_OP_DOMAIN = 'ai.onnx.contrib'
 CUSTOM_OP_VERSION = 9  # Not sure what opset version to use, or if it matters
 
+
 # Register custom onnx-runtime implementations in python
 # This will be registered to the domain ai.onnx.contrib
 @ortx.onnx_op(op_type="linalg_cholesky", inputs=[ortx.PyCustomOpDef.dt_float])
@@ -32,8 +33,8 @@ def linalg_solve_triangular(a, b, upper, left=True, unitriangular=False):
 
 
 @ortx.onnx_op(op_type="numpy_transpose", inputs=[ortx.PyCustomOpDef.dt_float])
-def numpy_transpose(x, axes):
-    return np.transpose(x, axes)
+def numpy_transpose(x):
+    return np.transpose(x, axes=(-2, -1))
 
 
 # Register the bindings from pytorch aten functions to implementations in onnx-runtime
@@ -46,7 +47,8 @@ def register_custom_ops():
 
     def bind_custom_op_mT(g, x):
         # x.mT is equivalent to x.transpose(-2, -1).
-        return g.op("ai.onnx.contrib::numpy_transpose", x, (-2, -1))
+        # For now, I ignore the perm attribute because I don't know how to bind it.
+        return g.op("ai.onnx.contrib::numpy_transpose", x)
 
     from torch.onnx import register_custom_op_symbolic
 
@@ -60,7 +62,7 @@ def register_custom_ops():
 
     register_custom_op_symbolic(symbolic_name='aten::mT',
                                 symbolic_fn=bind_custom_op_mT,
-                                opset_version=CUSTOM_OP_VERSION)
+                                opset_version=1)
 
 
 # Create an ONNX Runtime session with the provided model and custom ops library
@@ -73,4 +75,3 @@ def create_session(model: str) -> onnxruntime.InferenceSession:
     sess1 = onnxruntime.InferenceSession(model, so1, providers=providers)
 
     return sess1
-

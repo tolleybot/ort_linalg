@@ -26,8 +26,6 @@ def bitwise_right_shift(a, b):
 
 # Register the bindings from pytorch aten functions to implementations in
 # onnx-runtime
-
-
 def register_custom_ops():
     def bind_custom_op_bitwise_left_shift(g, a, b):
         return g.op("ai.onnx.contrib::bitwise_left_shift", a, b)

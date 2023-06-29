@@ -209,6 +209,7 @@ def test_gp():
             preds = model(x_batch)
             means = torch.cat([means, preds.mean.cpu()])
     means = means[1:]
+    print()
     print('Train MAE: {}'.format(torch.mean(torch.abs(means - Y.cpu()))))
 
     # ONNX tests

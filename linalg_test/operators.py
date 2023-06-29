@@ -96,32 +96,7 @@ def scaled_dot_product_attention(q, k, v, is_causal):
     attn_weight = torch.softmax(attn_weight, dim=-1)
     
     return attn_weight @ v
-"""
-def scaled_dot_product_attention(q, k, v, is_causal):
-    "" custom operator for scaled dot product attention""
-    attn_mask=None
-    if isinstance(q, np.ndarray):
-        q = torch.from_numpy(q)
-    if isinstance(k, np.ndarray):
-        k = torch.from_numpy(k)
-    if isinstance(v, np.ndarray):
-        v = torch.from_numpy(v)
 
-    q = q.view(-1, q.shape[-1])  # Reshape q to (10, 512)
-    k = k.view(-1, k.shape[-1]).transpose(-1, -2)  # Reshape k to (512, 10)
-
-    if is_causal:
-        attn_mask = torch.ones(q.size(0), k.size(0), dtype=torch.bool).tril(diagonal=0)
-        attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
-    elif attn_mask is not None:
-        attn_mask = attn_mask.masked_fill(~attn_mask, -float('inf'))
-    else:
-        attn_mask = torch.zeros_like(q @ k)  
-
-    attn_weight = torch.softmax((q @ k / math.sqrt(q.size(-1))) + attn_mask, dim=-1)
-    return attn_weight @ v
-
-"""
 # Register the bindings from pytorch aten functions to implementations in onnx-runtime
 def register_custom_ops():
     def bind_custom_op_cholesky(g, x, upper):

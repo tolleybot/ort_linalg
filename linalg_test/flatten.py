@@ -43,7 +43,7 @@ class CustomModelFlatten(torch.nn.Module):
         return x
 
 def create_custom_model(model_file: str = MODEL_FILE, dtype=torch.float32):
-    """ Create our simple model for testing bitwise left shift or right shift """    
+    """ Create our simple model """    
     inputs = (torch.randn(16, 4, 1, dtype=dtype))
     
     model = CustomModelFlatten()
